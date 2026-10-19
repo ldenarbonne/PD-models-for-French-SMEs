@@ -1,0 +1,14 @@
+# Données brutes (non versionnées)
+data/
+*.parquet
+base_*.csv
+r_*.csv
+dpc*.csv
+sirene*.csv
+bodacc*.csv
+*.zip
+*.pkl
+*.npy
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
