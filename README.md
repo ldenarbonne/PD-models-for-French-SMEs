@@ -26,6 +26,8 @@ Five cumulative PD models (1Y, 2Y, 3Y, 4Y, 5Y) for French small and medium-sized
 </p>
 <p align="center"><img src="v2_balance_sheet/outputs/fig_calibration.png" width="95%"></p>
 
+**Interactive app:** a Streamlit PD calculator applying the five scorecards is in `app/` (see *Interactive app* below).
+
 ---
 
 ## Data
@@ -90,9 +92,26 @@ Raw data are **not** stored in this repository (over 1 GB). The scripts download
 
 ---
 
+## Benchmark against the Merton model
+
+An "accounting Merton" model (book leverage, sector asset volatility from Damodaran, zero drift) was computed on the same 222,000 company-years (`v2_balance_sheet/15_merton_comparison.py`):
+
+| Horizon | Observed default rate | Mean PD scorecard | Mean PD Merton | Gini scorecard | Gini Merton |
+|---|---|---|---|---|---|
+| 1 year | 0.63% | 0.63% | 24.6% | 59.3% | 32.0% |
+| 3 years | 2.33% | 2.36% | 35.2% | 52.2% | 29.0% |
+| 5 years | 4.52% | 4.57% | 42.0% | 46.5% | 26.0% |
+
+Without market data, Merton PDs are badly miscalibrated (default point = total liabilities, book values) and roughly half as discriminating. An empirical DD-to-PD mapping (KMV-style) fixes the level, and adding the distance to default to the scorecard brings no gain: the information is already captured by the equity ratio.
+
+## Interactive app
+
+`app/streamlit_app.py` applies the five WoE scorecards to a company profile entered by the user: 1- to 5-year cumulative and marginal PDs, rating grade, and score breakdown by variable. Run locally with `streamlit run app/streamlit_app.py`, or deploy for free on [Streamlit Community Cloud](https://share.streamlit.io) by pointing it to `app/streamlit_app.py` in this repository.
+
 ## Repository structure
 
 ```
+├── app/                               Streamlit PD calculator (streamlit_app.py, requirements.txt)
 ├── PD_PME_France_modeles_bilan.xlsx   Full results workbook (V2): performance, coefficients,
 │                                      WoE scorecards, IV, calibration, master scale, data quality
 ├── v1_kaggle/                         V1 — P&L-only models (Kaggle + BODACC)
@@ -107,6 +126,7 @@ Raw data are **not** stored in this repository (over 1 GB). The scripts download
     ├── 12_models_bilan.py             WoE logit + LightGBM, 5 horizons
     ├── 13_report_bilan.py             Charts, Excel workbook, V1/V2 comparison
     ├── 14_qualite_donnees.py          Missing values and redundancy analysis
+    ├── 15_merton_comparison.py        Benchmark against an accounting Merton model
     └── outputs/
 ```
 
