@@ -12,8 +12,21 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "v2_balance_sheet" / "outputs"
+def _find_outputs():
+    """Locate v2_balance_sheet/outputs whether the app sits at the repo root or in app/."""
+    here = Path(__file__).resolve().parent
+    for base in (here, here.parent, Path.cwd()):
+        for cand in (base / "v2_balance_sheet" / "outputs", base / "outputs", base):
+            if (cand / "grilles_woe.csv").exists():
+                return cand
+    for base in (Path.cwd(), here, here.parent):
+        hits = sorted(base.rglob("grilles_woe.csv"))
+        if hits:
+            return hits[0].parent
+    return None
+
+
+OUT = _find_outputs()
 H = [1, 2, 3, 4, 5]
 
 # Label used in grilles_woe.csv -> internal code
@@ -112,6 +125,10 @@ st.title("Probability of default — French SMEs")
 st.caption("Five WoE logistic scorecards (1- to 5-year cumulative PD) estimated on French open data "
            "(BCE/INPI financial ratios, SIRENE, BODACC). Illustrative research model, not a credit decision tool.")
 
+if OUT is None:
+    st.error("Scorecard files not found: the repository must contain "
+             "v2_balance_sheet/outputs/grilles_woe.csv and coefficients.csv.")
+    st.stop()
 g, c = load_scorecards()
 tab_calc, tab_perf, tab_about = st.tabs(["PD calculator", "Model performance", "Methodology"])
 
