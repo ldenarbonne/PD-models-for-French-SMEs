@@ -11,6 +11,8 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from scipy.optimize import fsolve
+from scipy.stats import norm
 
 def _find_outputs():
     """Locate v2_balance_sheet/outputs whether the app sits at the repo root or in app/."""
@@ -130,7 +132,7 @@ if OUT is None:
              "v2_balance_sheet/outputs/grilles_woe.csv and coefficients.csv.")
     st.stop()
 g, c = load_scorecards()
-tab_calc, tab_perf, tab_about = st.tabs(["PD calculator", "Model performance", "Methodology"])
+tab_calc, tab_merton, tab_perf, tab_about = st.tabs(["PD calculator", "Merton model", "Model performance", "Methodology"])
 
 with tab_calc:
     left, right = st.columns([1, 1.4], gap="large")
@@ -199,6 +201,88 @@ with tab_calc:
         ).properties(height=34 * len(cb))
         st.altair_chart(bars, width="stretch")
         st.caption("Orange bars push the PD up, blue bars push it down, relative to an average company.")
+
+with tab_merton:
+    st.subheader("Merton (1974) structural model")
+    st.caption("Equity is a call option on the firm's assets. The asset value V and asset volatility σV are "
+               "solved from the observed equity value and volatility; PD = N(−d2).")
+    m1, m2 = st.columns([1, 1.4], gap="large")
+    with m1:
+        shares = st.number_input("Number of outstanding shares", 0.0, 1e9, 11.0, 1.0)
+        price = st.number_input("Equity price", 0.0, 1e6, 19.6656, 0.1, format="%.4f")
+        sig_e = st.number_input("Equity volatility (%)", 1.0, 300.0, 40.0, 1.0) / 100
+        debt = st.number_input("Total debt (default point)", 0.01, 1e12, 150.0, 1.0)
+        t_m = st.number_input("Horizon T (years)", 0.25, 10.0, 2.0, 0.25)
+        r_m = st.number_input("Risk-free rate (%)", -2.0, 20.0, 5.0, 0.25) / 100
+
+    E = shares * price
+
+    def merton_eq(x):
+        V, sV = x
+        sV = abs(sV) + 1e-9
+        d1 = (np.log(V / debt) + (r_m + sV ** 2 / 2) * t_m) / (sV * np.sqrt(t_m))
+        d2 = d1 - sV * np.sqrt(t_m)
+        return [V * norm.cdf(d1) - debt * np.exp(-r_m * t_m) * norm.cdf(d2) - E,
+                norm.cdf(d1) * V * sV - E * sig_e]
+
+    if E <= 0:
+        st.warning("The equity value must be positive.")
+    else:
+        V, sV = fsolve(merton_eq, [E + debt * np.exp(-r_m * t_m), sig_e * E / (E + debt)], xtol=1e-12)
+        sV = abs(sV)
+        d1 = (np.log(V / debt) + (r_m + sV ** 2 / 2) * t_m) / (sV * np.sqrt(t_m))
+        d2 = d1 - sV * np.sqrt(t_m)
+        pd_m = norm.cdf(-d2)
+        dd_kmv = (V - debt) / (V * sV * np.sqrt(t_m))
+        resid = merton_eq([V, sV])
+        with m2:
+            k = st.columns(3)
+            k[0].metric(f"PD over {t_m:g} years (risk-neutral)", f"{pd_m:.2%}")
+            k[1].metric("Distance to default d2", f"{d2:.2f}")
+            k[2].metric("Asset volatility σV", f"{sV:.2%}")
+            st.dataframe(pd.DataFrame({
+                "Quantity": ["Equity value E", "Asset value V", "Asset volatility σV", "d1", "d2",
+                             "PD = N(−d2)", "DD (KMV simplified) = (V − D) / (V σV √T)", "N(−DD KMV)",
+                             "Leverage D / V", "Max residual of the Merton system"],
+                "Value": [f"{E:,.2f}", f"{V:,.2f}", f"{sV:.4%}", f"{d1:.4f}", f"{d2:.4f}", f"{pd_m:.4%}",
+                          f"{dd_kmv:.4f}", f"{norm.cdf(-dd_kmv):.4%}", f"{debt / V:.2%}",
+                          f"{max(abs(resid[0]), abs(resid[1])):.2e}"]}),
+                hide_index=True, width="stretch")
+            hs = np.arange(1, 11)
+            ts_m = pd.DataFrame({"Horizon (years)": hs, "Cumulative PD (%)": [
+                100 * norm.cdf(-((np.log(V / debt) + (r_m - sV ** 2 / 2) * h) / (sV * np.sqrt(h)))) for h in hs]})
+            st.altair_chart(alt.Chart(ts_m).mark_line(point=True, strokeWidth=2, color="#2a78d6").encode(
+                x=alt.X("Horizon (years):O", axis=alt.Axis(labelAngle=0)), y="Cumulative PD (%):Q",
+                tooltip=["Horizon (years)", alt.Tooltip("Cumulative PD (%):Q", format=".3f")]
+            ).properties(height=240, title="Merton PD term structure"), width="stretch")
+
+    st.divider()
+    st.subheader("Benchmark on French SMEs: scorecard vs accounting Merton")
+    st.caption("SMEs are unlisted, so Merton is applied with book leverage (1 − equity ratio), sector asset "
+               "volatility (Damodaran) and zero drift, on 222,000 company-years (closings 2016–2019).")
+    f_cmp = OUT / "merton_comparison.csv"
+    if f_cmp.exists():
+        mc = pd.read_csv(f_cmp)
+        disp = mc[["Horizon", "Observed default rate", "Mean PD scorecard", "Mean PD Merton",
+                   "Gini scorecard", "Gini Merton", "Spearman rho (scorecard vs Merton)"]].copy()
+        for col in disp.columns[1:6]:
+            disp[col] = disp[col].map("{:.2%}".format)
+        disp[disp.columns[6]] = disp[disp.columns[6]].map("{:.2f}".format)
+        st.dataframe(disp, hide_index=True, width="stretch")
+        long = mc.melt(id_vars="Horizon", value_vars=["Gini scorecard", "Gini Merton"],
+                       var_name="Model", value_name="Gini")
+        st.altair_chart(alt.Chart(long).mark_bar(cornerRadiusEnd=4).encode(
+            x=alt.X("Horizon:N", axis=alt.Axis(labelAngle=0)), xOffset="Model:N",
+            y=alt.Y("Gini:Q", axis=alt.Axis(format="%")),
+            color=alt.Color("Model:N", scale=alt.Scale(range=["#eb6834", "#2a78d6"])),
+            tooltip=["Horizon", "Model", alt.Tooltip("Gini:Q", format=".1%")]
+        ).properties(height=260, title="Discriminatory power"), width="stretch")
+        st.markdown("Without market data, Merton reduces to a book-leverage model: PDs are far too high "
+                    "(the default point is total liabilities at book value) and the ranking power is about half "
+                    "that of the multivariate scorecard. An empirical DD-to-PD mapping (KMV approach) fixes the level, "
+                    "and adding DD to the scorecard brings no gain: the equity ratio already carries this information.")
+    else:
+        st.info("Benchmark file merton_comparison.csv not found in the outputs folder.")
 
 with tab_perf:
     perf = pd.read_csv(OUT / "performance.csv")
